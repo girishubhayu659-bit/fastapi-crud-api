@@ -4,7 +4,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
-app = FastAPI()
+app = FastAPI(
+    title="Task Management API",
+    description="A lightweight in-memory CRUD API for managing to-do tasks.",
+    version="1.0.0",
+)
 
 
 @app.exception_handler(RequestValidationError)
@@ -46,7 +50,11 @@ class TaskUpdate(BaseModel):
         return v.strip() if v is not None else None
 
 
-@app.get("/")
+@app.get(
+    "/",
+    summary="API Root Information",
+    description="Returns API metadata and primary endpoints.",
+)
 def read_root():
     return {
         "name": "Task API",
@@ -55,17 +63,29 @@ def read_root():
     }
 
 
-@app.get("/health")
+@app.get(
+    "/health",
+    summary="Service Health Check",
+    description="Returns the health status of the API server.",
+)
 def read_health():
     return {"status": "ok"}
 
 
-@app.get("/tasks")
+@app.get(
+    "/tasks",
+    summary="List all tasks",
+    description="Returns the entire list of tasks currently in memory.",
+)
 def get_tasks():
     return tasks
 
 
-@app.get("/tasks/{id}")
+@app.get(
+    "/tasks/{id}",
+    summary="Get a single task",
+    description="Fetches a specific task by its unique ID. Returns 404 if not found.",
+)
 def get_task(id: int):
     for task in tasks:
         if task["id"] == id:
@@ -76,7 +96,12 @@ def get_task(id: int):
     )
 
 
-@app.post("/tasks", status_code=status.HTTP_201_CREATED)
+@app.post(
+    "/tasks",
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new task",
+    description="Adds a new task with the next available ID and done=false.",
+)
 def create_task(task_in: TaskCreate):
     next_id = max([t["id"] for t in tasks], default=0) + 1
     new_task = {
@@ -88,7 +113,11 @@ def create_task(task_in: TaskCreate):
     return new_task
 
 
-@app.put("/tasks/{id}")
+@app.put(
+    "/tasks/{id}",
+    summary="Update an existing task",
+    description="Updates title and/or done status for a task. Returns 404 if not found, 400 if invalid.",
+)
 def update_task(id: int, task_in: TaskUpdate):
     if task_in.title is None and task_in.done is None:
         return JSONResponse(
@@ -108,7 +137,12 @@ def update_task(id: int, task_in: TaskUpdate):
     )
 
 
-@app.delete("/tasks/{id}", status_code=status.HTTP_204_NO_CONTENT)
+@app.delete(
+    "/tasks/{id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a task",
+    description="Deletes a task by ID. Returns 204 No Content on success, 404 if not found.",
+)
 def delete_task(id: int):
     for i, task in enumerate(tasks):
         if task["id"] == id:
