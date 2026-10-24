@@ -132,6 +132,22 @@ def get_task(id: int):
     return {"id": row["id"], "title": row["title"], "done": bool(row["done"])}
 
 
+@app.post(
+    "/tasks",
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new task",
+    description="Inserts a new task into SQLite with done=false.",
+)
+def create_task(task_in: TaskCreate):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", (task_in.title, 0))
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+    return {"id": new_id, "title": task_in.title, "done": False}
+
+
 if __name__ == "__main__":
     import uvicorn
 
