@@ -1,14 +1,49 @@
+import sqlite3
 from typing import Optional
-from fastapi import FastAPI, Request, Response, status
+from fastapi import FastAPI, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
+DATABASE = "tasks.db"
+
+
+def get_db_connection():
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            done INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    cursor.execute("SELECT COUNT(*) FROM tasks")
+    count = cursor.fetchone()[0]
+    if count == 0:
+        cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Buy groceries", 0))
+        cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Read a book", 1))
+        cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Write code", 0))
+        conn.commit()
+    conn.close()
+
+
 app = FastAPI(
     title="Task Management API",
-    description="A lightweight in-memory CRUD API for managing to-do tasks.",
-    version="1.0.0",
+    description="A lightweight SQLite-backed CRUD API for managing to-do tasks.",
+    version="2.0.0",
 )
+
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
 
 
 @app.exception_handler(RequestValidationError)
@@ -17,14 +52,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         status_code=status.HTTP_400_BAD_REQUEST,
         content={"error": "Invalid request body or parameters"},
     )
-
-
-# In-memory storage with 3 initial example tasks
-tasks = [
-    {"id": 1, "title": "Buy groceries", "done": False},
-    {"id": 2, "title": "Read a book", "done": True},
-    {"id": 3, "title": "Write code", "done": False},
-]
 
 
 class TaskCreate(BaseModel):
@@ -58,7 +85,7 @@ class TaskUpdate(BaseModel):
 def read_root():
     return {
         "name": "Task API",
-        "version": "1.0",
+        "version": "2.0",
         "endpoints": ["/tasks"],
     }
 
@@ -75,86 +102,19 @@ def read_health():
 @app.get(
     "/tasks",
     summary="List all tasks",
-    description="Returns the entire list of tasks currently in memory.",
+    description="Returns tasks from SQLite database.",
 )
 def get_tasks():
-    return tasks
-
-
-@app.get(
-    "/tasks/{id}",
-    summary="Get a single task",
-    description="Fetches a specific task by its unique ID. Returns 404 if not found.",
-)
-def get_task(id: int):
-    for task in tasks:
-        if task["id"] == id:
-            return task
-    return JSONResponse(
-        status_code=status.HTTP_404_NOT_FOUND,
-        content={"error": f"Task {id} not found"},
-    )
-
-
-@app.post(
-    "/tasks",
-    status_code=status.HTTP_201_CREATED,
-    summary="Create a new task",
-    description="Adds a new task with the next available ID and done=false.",
-)
-def create_task(task_in: TaskCreate):
-    next_id = max([t["id"] for t in tasks], default=0) + 1
-    new_task = {
-        "id": next_id,
-        "title": task_in.title,
-        "done": False,
-    }
-    tasks.append(new_task)
-    return new_task
-
-
-@app.put(
-    "/tasks/{id}",
-    summary="Update an existing task",
-    description="Updates title and/or done status for a task. Returns 404 if not found, 400 if invalid.",
-)
-def update_task(id: int, task_in: TaskUpdate):
-    if task_in.title is None and task_in.done is None:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "Request body must contain 'title' or 'done'"},
-        )
-    for task in tasks:
-        if task["id"] == id:
-            if task_in.title is not None:
-                task["title"] = task_in.title
-            if task_in.done is not None:
-                task["done"] = task_in.done
-            return task
-    return JSONResponse(
-        status_code=status.HTTP_404_NOT_FOUND,
-        content={"error": f"Task {id} not found"},
-    )
-
-
-@app.delete(
-    "/tasks/{id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a task",
-    description="Deletes a task by ID. Returns 204 No Content on success, 404 if not found.",
-)
-def delete_task(id: int):
-    for i, task in enumerate(tasks):
-        if task["id"] == id:
-            tasks.pop(i)
-            return Response(status_code=status.HTTP_204_NO_CONTENT)
-    return JSONResponse(
-        status_code=status.HTTP_404_NOT_FOUND,
-        content={"error": f"Task {id} not found"},
-    )
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, title, done FROM tasks")
+    rows = cursor.fetchall()
+    conn.close()
+    return [{"id": row["id"], "title": row["title"], "done": bool(row["done"])} for row in rows]
 
 
 if __name__ == "__main__":
     import uvicorn
 
+    init_db()
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
