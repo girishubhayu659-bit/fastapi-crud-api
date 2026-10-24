@@ -148,6 +148,63 @@ def create_task(task_in: TaskCreate):
     return {"id": new_id, "title": task_in.title, "done": False}
 
 
+@app.put(
+    "/tasks/{id}",
+    summary="Update an existing task",
+    description="Updates task title and/or done status in SQLite. Returns 404 if not found, 400 if invalid.",
+)
+def update_task(id: int, task_in: TaskUpdate):
+    if task_in.title is None and task_in.done is None:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Request body must contain 'title' or 'done'"},
+        )
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM tasks WHERE id = ?", (id,))
+    existing = cursor.fetchone()
+    if existing is None:
+        conn.close()
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": "Task not found"},
+        )
+
+    new_title = task_in.title if task_in.title is not None else existing["title"]
+    new_done = int(task_in.done) if task_in.done is not None else existing["done"]
+
+    cursor.execute(
+        "UPDATE tasks SET title = ?, done = ? WHERE id = ?",
+        (new_title, new_done, id),
+    )
+    conn.commit()
+    conn.close()
+    return {"id": id, "title": new_title, "done": bool(new_done)}
+
+
+@app.delete(
+    "/tasks/{id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a task",
+    description="Removes a task from SQLite by ID. Returns 204 on success, 404 if not found.",
+)
+def delete_task(id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM tasks WHERE id = ?", (id,))
+    existing = cursor.fetchone()
+    if existing is None:
+        conn.close()
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": "Task not found"},
+        )
+    cursor.execute("DELETE FROM tasks WHERE id = ?", (id,))
+    conn.commit()
+    conn.close()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 if __name__ == "__main__":
     import uvicorn
 
