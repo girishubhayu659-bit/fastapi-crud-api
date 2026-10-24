@@ -24,13 +24,17 @@ def init_db():
             done INTEGER NOT NULL DEFAULT 0
         )
     """)
+    # Add index for optimized filtering (stretch goal)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_done ON tasks (done)")
+    
     cursor.execute("SELECT COUNT(*) FROM tasks")
     count = cursor.fetchone()[0]
     if count == 0:
-        cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Buy groceries", 0))
-        cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Read a book", 1))
-        cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Write code", 0))
-        conn.commit()
+        # Atomic transaction for multi-step seeding (stretch goal)
+        with conn:
+            cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Buy groceries", 0))
+            cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Read a book", 1))
+            cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Write code", 0))
     conn.close()
 
 
@@ -102,12 +106,34 @@ def read_health():
 @app.get(
     "/tasks",
     summary="List all tasks",
-    description="Returns tasks from the SQLite database.",
+    description="Returns tasks from SQLite with optional filtering, search, and sorting.",
 )
-def get_tasks():
+def get_tasks(
+    done: Optional[bool] = Query(None, description="Filter by completion status"),
+    search: Optional[str] = Query(None, description="Search keyword in title"),
+    sort: Optional[str] = Query(None, description="Sort field (e.g. 'title')"),
+):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tasks")
+    query = "SELECT * FROM tasks"
+    params = []
+    conditions = []
+
+    if done is not None:
+        conditions.append("done = ?")
+        params.append(1 if done else 0)
+
+    if search:
+        conditions.append("title LIKE ?")
+        params.append(f"%{search.strip()}%")
+
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+
+    if sort == "title":
+        query += " ORDER BY title ASC"
+
+    cursor.execute(query, tuple(params))
     rows = cursor.fetchall()
     conn.close()
     return [{"id": row["id"], "title": row["title"], "done": bool(row["done"])} for row in rows]
@@ -203,6 +229,42 @@ def delete_task(id: int):
     conn.commit()
     conn.close()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.get(
+    "/stats",
+    summary="Get task statistics",
+    description="Computes total, completed, and open task counts using SQL COUNT queries.",
+)
+def get_stats():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM tasks")
+    total = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM tasks WHERE done = 1")
+    done_count = cursor.fetchone()[0]
+
+    conn.close()
+    open_count = total - done_count
+    return {"total": total, "done": done_count, "open": open_count}
+
+
+@app.post(
+    "/reset",
+    summary="Reset tasks to initial seed state",
+    description="Clears the table and re-seeds the default 3 tasks.",
+)
+def reset_tasks():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM tasks")
+    cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Buy groceries", 0))
+    cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Read a book", 1))
+    cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Write code", 0))
+    conn.commit()
+    conn.close()
+    return {"message": "Database reset to initial 3 seed tasks", "total": 3}
 
 
 if __name__ == "__main__":
