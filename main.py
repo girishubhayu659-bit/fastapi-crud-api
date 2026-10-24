@@ -102,15 +102,34 @@ def read_health():
 @app.get(
     "/tasks",
     summary="List all tasks",
-    description="Returns tasks from SQLite database.",
+    description="Returns tasks from the SQLite database.",
 )
 def get_tasks():
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, title, done FROM tasks")
+    cursor.execute("SELECT * FROM tasks")
     rows = cursor.fetchall()
     conn.close()
     return [{"id": row["id"], "title": row["title"], "done": bool(row["done"])} for row in rows]
+
+
+@app.get(
+    "/tasks/{id}",
+    summary="Get a single task",
+    description="Fetches a specific task from SQLite by ID. Returns 404 if not found.",
+)
+def get_task(id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM tasks WHERE id = ?", (id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row is None:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": "Task not found"},
+        )
+    return {"id": row["id"], "title": row["title"], "done": bool(row["done"])}
 
 
 if __name__ == "__main__":
