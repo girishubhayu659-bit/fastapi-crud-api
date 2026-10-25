@@ -1,3 +1,15 @@
+# FlyRank Backend Track — Progressive API Stack
+
+> ### 📌 Project Milestones & Branches
+> This repository documents the progressive evolution of our backend system across all internship weeks. Each milestone is preserved in its own branch with its dedicated code, configuration, and documentation:
+>
+> * 🚀 **Assignment 1:** [**Week 2 — In-Memory CRUD API**](https://github.com/girishubhayu659-bit/fastapi-crud-api/tree/w2-build-your-first-crud-api)
+> * 🗄️ **Assignment 2:** [**Week 3 — SQLite Database Persistence**](https://github.com/girishubhayu659-bit/fastapi-crud-api/tree/w3-connecting-crud-to-database)
+> * 🐳 **Assignment 3:** [**Week 3 — Containerized PostgreSQL Stack**](https://github.com/girishubhayu659-bit/fastapi-crud-api/tree/w3-containerize-your-stack)
+> * 🔒 **Assignment 4 (Current):** [**Week 4 — Supabase Auth & JWT Protection**](https://github.com/girishubhayu659-bit/fastapi-crud-api/tree/w4-auth-login-and-protect)
+
+---
+
 # Auth · Login & Protect API (Supabase Auth & JWT Protection)
 
 A production-grade, secure RESTful API built with **Python 3.11/3.13**, **FastAPI**, and **Supabase Auth** as the trusted Identity Provider.
