@@ -2,9 +2,10 @@ import logging
 import os
 from typing import Optional
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Response, status
+from fastapi import Depends, FastAPI, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
 from pydantic import BaseModel, field_validator
 from supabase import create_client, Client
@@ -31,6 +32,17 @@ app = FastAPI(
     description="A secure API with Supabase Auth (Sign Up, Log In, Log Out, JWT Verification).",
     version="4.0.0",
 )
+
+
+class AuthError(Exception):
+    def __init__(self, message: str, status_code: int = 401):
+        self.message = message
+        self.status_code = status_code
+
+
+@app.exception_handler(AuthError)
+async def auth_error_handler(request: Request, exc: AuthError):
+    return JSONResponse(status_code=exc.status_code, content={"error": exc.message})
 
 
 @app.on_event("startup")
@@ -81,6 +93,23 @@ def verify_token(token: str):
         return None
 
 
+# Reusable FastAPI auth dependency
+security = HTTPBearer(auto_error=False)
+
+
+def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+    if not credentials or not credentials.credentials:
+        raise AuthError("Access token required", status_code=401)
+    token = credentials.credentials.strip()
+    if not token:
+        raise AuthError("Access token required", status_code=401)
+
+    user = verify_token(token)
+    if not user:
+        raise AuthError("Invalid or expired token", status_code=401)
+    return user
+
+
 @app.get(
     "/",
     summary="API Root Information",
@@ -95,6 +124,7 @@ def read_root():
             "/auth/login",
             "/auth/logout",
             "/protected/profile",
+            "/protected/dashboard",
             "/public/info",
         ],
     }
@@ -180,6 +210,20 @@ def login(creds: AuthCredentials):
         }
 
 
+@app.post(
+    "/auth/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="User logout",
+    description="Ends the user session and invalidates the session via Supabase.",
+)
+def logout(current_user: dict = Depends(get_current_user)):
+    try:
+        supabase.auth.sign_out()
+    except Exception as e:
+        logger.debug("Sign out notice: %s", e)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @app.get(
     "/public/info",
     summary="Public Information",
@@ -191,31 +235,24 @@ def public_info():
 
 @app.get(
     "/protected/profile",
-    summary="Protected Profile (Verified)",
-    description="Returns verified user metadata or 401 if token is invalid/expired.",
+    summary="Protected Profile",
+    description="Returns verified user profile metadata protected by auth dependency.",
 )
-def protected_profile(request: Request):
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return JSONResponse(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"error": "Access token required"},
-        )
-    token = auth_header.split("Bearer ")[1].strip()
-    if not token:
-        return JSONResponse(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"error": "Access token required"},
-        )
+def protected_profile(current_user: dict = Depends(get_current_user)):
+    return current_user
 
-    user_data = verify_token(token)
-    if not user_data:
-        return JSONResponse(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            content={"error": "Invalid or expired token"},
-        )
 
-    return user_data
+@app.get(
+    "/protected/dashboard",
+    summary="Protected Dashboard",
+    description="Second protected endpoint reusing the auth dependency.",
+)
+def protected_dashboard(current_user: dict = Depends(get_current_user)):
+    return {
+        "message": "Welcome to your protected dashboard!",
+        "user_id": current_user["id"],
+        "email": current_user["email"],
+    }
 
 
 if __name__ == "__main__":
