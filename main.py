@@ -157,6 +157,36 @@ def login(creds: AuthCredentials):
         }
 
 
+@app.get(
+    "/public/info",
+    summary="Public Information",
+    description="Public open endpoint accessible without authentication.",
+)
+def public_info():
+    return {"message": "Welcome stranger! This info is public."}
+
+
+@app.get(
+    "/protected/profile",
+    summary="Protected Profile (Token Check)",
+    description="Protected endpoint checking for Authorization Bearer token header.",
+)
+def protected_profile_unverified(request: Request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"error": "Access token required"},
+        )
+    token = auth_header.split("Bearer ")[1].strip()
+    if not token:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"error": "Access token required"},
+        )
+    return {"message": "Token presented successfully"}
+
+
 if __name__ == "__main__":
     import uvicorn
 
