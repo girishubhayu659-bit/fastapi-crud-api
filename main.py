@@ -1,47 +1,65 @@
-import sqlite3
+import os
+import time
 from typing import Optional
+from dotenv import load_dotenv
 from fastapi import FastAPI, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
+import psycopg
+from psycopg.rows import dict_row
 
-DATABASE = "tasks.db"
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL", "postgres://postgres:dev@localhost:5432/tasks")
 
 
 def get_db_connection():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
 
-def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            done INTEGER NOT NULL DEFAULT 0
-        )
-    """)
-    # Add index for optimized filtering (stretch goal)
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tasks_done ON tasks (done)")
-    
-    cursor.execute("SELECT COUNT(*) FROM tasks")
-    count = cursor.fetchone()[0]
-    if count == 0:
-        # Atomic transaction for multi-step seeding (stretch goal)
-        with conn:
-            cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Buy groceries", 0))
-            cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Read a book", 1))
-            cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Write code", 0))
-    conn.close()
+def init_db(max_retries=5, delay=2):
+    for attempt in range(max_retries):
+        try:
+            conn = get_db_connection()
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS tasks (
+                        id SERIAL PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        done BOOLEAN NOT NULL DEFAULT FALSE
+                    );
+                """)
+                cursor.execute("SELECT COUNT(*) AS count FROM tasks;")
+                row = cursor.fetchone()
+                count = row["count"] if row else 0
+                if count == 0:
+                    cursor.execute(
+                        "INSERT INTO tasks (title, done) VALUES (%s, %s);",
+                        ("Buy groceries", False),
+                    )
+                    cursor.execute(
+                        "INSERT INTO tasks (title, done) VALUES (%s, %s);",
+                        ("Read a book", True),
+                    )
+                    cursor.execute(
+                        "INSERT INTO tasks (title, done) VALUES (%s, %s);",
+                        ("Write code", False),
+                    )
+            conn.commit()
+            conn.close()
+            return
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+            else:
+                print(f"Database connection error: {e}")
 
 
 app = FastAPI(
-    title="Task Management API",
-    description="A lightweight SQLite-backed CRUD API for managing to-do tasks.",
-    version="2.0.0",
+    title="Task Management API (Postgres Edition)",
+    description="A containerized CRUD API backed by PostgreSQL.",
+    version="3.0.0",
 )
 
 
@@ -89,7 +107,7 @@ class TaskUpdate(BaseModel):
 def read_root():
     return {
         "name": "Task API",
-        "version": "2.0",
+        "version": "3.0",
         "endpoints": ["/tasks"],
     }
 
@@ -106,169 +124,19 @@ def read_health():
 @app.get(
     "/tasks",
     summary="List all tasks",
-    description="Returns tasks from SQLite with optional filtering, search, and sorting.",
+    description="Returns tasks from the PostgreSQL database.",
 )
-def get_tasks(
-    done: Optional[bool] = Query(None, description="Filter by completion status"),
-    search: Optional[str] = Query(None, description="Search keyword in title"),
-    sort: Optional[str] = Query(None, description="Sort field (e.g. 'title')"),
-):
+def get_tasks():
     conn = get_db_connection()
-    cursor = conn.cursor()
-    query = "SELECT * FROM tasks"
-    params = []
-    conditions = []
-
-    if done is not None:
-        conditions.append("done = ?")
-        params.append(1 if done else 0)
-
-    if search:
-        conditions.append("title LIKE ?")
-        params.append(f"%{search.strip()}%")
-
-    if conditions:
-        query += " WHERE " + " AND ".join(conditions)
-
-    if sort == "title":
-        query += " ORDER BY title ASC"
-
-    cursor.execute(query, tuple(params))
-    rows = cursor.fetchall()
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT id, title, done FROM tasks ORDER BY id ASC;")
+        rows = cursor.fetchall()
     conn.close()
     return [{"id": row["id"], "title": row["title"], "done": bool(row["done"])} for row in rows]
-
-
-@app.get(
-    "/tasks/{id}",
-    summary="Get a single task",
-    description="Fetches a specific task from SQLite by ID. Returns 404 if not found.",
-)
-def get_task(id: int):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tasks WHERE id = ?", (id,))
-    row = cursor.fetchone()
-    conn.close()
-    if row is None:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"error": "Task not found"},
-        )
-    return {"id": row["id"], "title": row["title"], "done": bool(row["done"])}
-
-
-@app.post(
-    "/tasks",
-    status_code=status.HTTP_201_CREATED,
-    summary="Create a new task",
-    description="Inserts a new task into SQLite with done=false.",
-)
-def create_task(task_in: TaskCreate):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", (task_in.title, 0))
-    conn.commit()
-    new_id = cursor.lastrowid
-    conn.close()
-    return {"id": new_id, "title": task_in.title, "done": False}
-
-
-@app.put(
-    "/tasks/{id}",
-    summary="Update an existing task",
-    description="Updates task title and/or done status in SQLite. Returns 404 if not found, 400 if invalid.",
-)
-def update_task(id: int, task_in: TaskUpdate):
-    if task_in.title is None and task_in.done is None:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={"error": "Request body must contain 'title' or 'done'"},
-        )
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tasks WHERE id = ?", (id,))
-    existing = cursor.fetchone()
-    if existing is None:
-        conn.close()
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"error": "Task not found"},
-        )
-
-    new_title = task_in.title if task_in.title is not None else existing["title"]
-    new_done = int(task_in.done) if task_in.done is not None else existing["done"]
-
-    cursor.execute(
-        "UPDATE tasks SET title = ?, done = ? WHERE id = ?",
-        (new_title, new_done, id),
-    )
-    conn.commit()
-    conn.close()
-    return {"id": id, "title": new_title, "done": bool(new_done)}
-
-
-@app.delete(
-    "/tasks/{id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a task",
-    description="Removes a task from SQLite by ID. Returns 204 on success, 404 if not found.",
-)
-def delete_task(id: int):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tasks WHERE id = ?", (id,))
-    existing = cursor.fetchone()
-    if existing is None:
-        conn.close()
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"error": "Task not found"},
-        )
-    cursor.execute("DELETE FROM tasks WHERE id = ?", (id,))
-    conn.commit()
-    conn.close()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@app.get(
-    "/stats",
-    summary="Get task statistics",
-    description="Computes total, completed, and open task counts using SQL COUNT queries.",
-)
-def get_stats():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM tasks")
-    total = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM tasks WHERE done = 1")
-    done_count = cursor.fetchone()[0]
-
-    conn.close()
-    open_count = total - done_count
-    return {"total": total, "done": done_count, "open": open_count}
-
-
-@app.post(
-    "/reset",
-    summary="Reset tasks to initial seed state",
-    description="Clears the table and re-seeds the default 3 tasks.",
-)
-def reset_tasks():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM tasks")
-    cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Buy groceries", 0))
-    cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Read a book", 1))
-    cursor.execute("INSERT INTO tasks (title, done) VALUES (?, ?)", ("Write code", 0))
-    conn.commit()
-    conn.close()
-    return {"message": "Database reset to initial 3 seed tasks", "total": 3}
 
 
 if __name__ == "__main__":
     import uvicorn
 
     init_db()
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
