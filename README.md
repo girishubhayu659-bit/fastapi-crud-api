@@ -1,138 +1,140 @@
-# Task Management CRUD API (Containerized PostgreSQL Stack)
+# Auth · Login & Protect API (Supabase Auth & JWT Protection)
 
-A production-ready RESTful CRUD API built with **Python 3.11/3.13**, **FastAPI**, and a containerized **PostgreSQL** database managed via **Docker Compose**.
+A production-grade, secure RESTful API built with **Python 3.11/3.13**, **FastAPI**, and **Supabase Auth** as the trusted Identity Provider.
 
-This assignment is the third evolution of the stack:
-- **Assignment 1:** In-memory storage (volatile).
-- **Assignment 2:** SQLite file storage (`tasks.db`).
-- **Assignment 3 (This project):** Containerized PostgreSQL running as a standalone service with persistent Docker volumes and zero-leak environment configuration.
+This service implements standard modern authentication: users sign up, log in, receive cryptographically signed JSON Web Tokens (JWTs), and access protected routes using HTTP Bearer authorization headers verified by a reusable FastAPI dependency guard.
 
 ---
 
-## 🚀 Quickstart (One Command for the Whole Stack)
+## 🔒 Security Architecture (The Trust Triangle)
 
-### 1. Configure Secrets
-Copy the committed environment template to create your local `.env`:
+1. **Identity Provider (Supabase Auth):** User credentials and password hashes are never stored on this API server. Supabase securely manages accounts and signs tokens.
+2. **Stateless JWT Verification:** Protected routes inspect the `Authorization: Bearer <token>` header, verifying token signatures and expiration via Supabase without storing sessions in server memory.
+3. **Environment Security:** API keys and project URLs live strictly in `.env` (which is git-ignored). A template `.env.example` is provided for configuration.
+
+---
+
+## 🚀 Quickstart (One Documented Command)
+
+### 1. Prerequisites
+- Python 3.10+ installed
+
+### 2. Configure Environment Variables
+Copy the template configuration file:
 
 ```bash
 cp .env.example .env
 ```
-
 *(On Windows PowerShell: `Copy-Item .env.example .env`)*
 
-The `.env` file contains your connection string:
+Fill in your Supabase credentials in `.env`:
 ```text
-DATABASE_URL=postgres://postgres:dev@localhost:5432/tasks
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your-anon-key-here
+PORT=8000
 ```
-*(Inside the Docker Compose network, the host is automatically remapped to `db:5432`).*
 
-### 2. Start the Entire Stack
-Run the single command to build the app, launch PostgreSQL, provision tables, and seed initial tasks:
+### 3. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Start the Server
+Run the single command:
 
 ```bash
-docker compose up
+python main.py
 ```
 
-To run in the background (detached mode):
-```bash
-docker compose up -d
-```
+*(Alternatively, via Uvicorn: `uvicorn main:app --reload --port 8000`)*
 
-To stop the entire stack without losing data:
-```bash
-docker compose down
-```
-
-The API will be live at: **`http://localhost:8000`**  
-Interactive Swagger UI documentation is available at: **[http://localhost:8000/docs](http://localhost:8000/docs)**
+The server will boot on `http://localhost:8000`.
 
 ---
 
-## 🗄️ Database Verification (`psql`)
+## 📖 API Reference Table
 
-The PostgreSQL database runs in an isolated container with a named volume (`taskdata`) guaranteeing that records survive container lifecycle restarts. 
+Interactive Swagger UI documentation with Bearer Auth padlock is live at:  
+👉 **[http://localhost:8000/docs](http://localhost:8000/docs)**
 
-You can inspect the running table directly using `psql`:
-
-![PostgreSQL psql verification](postgres_psql.png)
-
-```bash
-docker exec -it taskdb psql -U postgres -d tasks
-```
-```sql
-\dt
-SELECT id, title, done FROM tasks;
-```
-
----
-
-## 📖 API Documentation & Endpoints
-
-| Method | Endpoint | Description | Request Body | Success Status | Error Statuses |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/` | API root metadata and discovery | None | `200 OK` | — |
-| `GET` | `/health` | Server & DB health check (`SELECT 1`) | None | `200 OK` | `503 Service Unavailable` |
-| `GET` | `/tasks` | List all tasks from PostgreSQL | None | `200 OK` | — |
-| `GET` | `/tasks/{id}` | Retrieve a single task by ID | None | `200 OK` | `404 Not Found` |
-| `POST` | `/tasks` | Create a new task (defaults `done: false`) | `{"title": "Buy milk"}` | `201 Created` | `400 Bad Request` |
-| `PUT` | `/tasks/{id}` | Update task title and/or done status | `{"title": "Updated", "done": true}` | `200 OK` | `400 Bad Request`, `404 Not Found` |
-| `DELETE`| `/tasks/{id}` | Delete a task by ID (returns empty body) | None | `204 No Content`| `404 Not Found` |
+| Method | Endpoint | Description | Auth Required? | Success Status | Error Statuses |
+| :--- | :--- | :--- | :---: | :--- | :--- |
+| `POST` | `/auth/signup` | Registers new user account via Supabase | **None** | `201 Created` | `400 Bad Request` |
+| `POST` | `/auth/login` | Authenticates user & returns JWT access token | **None** | `200 OK` | `400 Bad Request`, `401 Unauthorized` |
+| `POST` | `/auth/logout` | Terminates user session | **`Bearer <token>`** | `204 No Content`| `401 Unauthorized` |
+| `GET` | `/public/info` | Public open data for unauthenticated visitors | **None** | `200 OK` | — |
+| `GET` | `/protected/profile`| Returns authenticated user's profile metadata | **`Bearer <token>`** | `200 OK` | `401 Unauthorized` |
+| `GET` | `/protected/dashboard`| Secondary protected route demonstrating middleware reuse | **`Bearer <token>`** | `200 OK` | `401 Unauthorized` |
 
 ---
 
 ## 🔍 Sample `curl -i` Output
 
-Real terminal output verifying status codes and PostgreSQL response:
+Real terminal interaction showing authentication and protected gate behavior:
 
-### List All Tasks from Postgres (`GET /tasks`)
-```http
-HTTP/1.1 200 OK
-date: Sun, 25 Oct 2026 14:48:10 GMT
-server: uvicorn
-content-length: 133
-content-type: application/json
-
-[
-  {"id": 1, "title": "Buy groceries", "done": false},
-  {"id": 2, "title": "Read a book", "done": true},
-  {"id": 3, "title": "Write code", "done": false}
-]
-```
-
-### Create a Task (`POST /tasks`)
+### 1. User Sign Up (`POST /auth/signup`)
 ```http
 HTTP/1.1 201 Created
-date: Sun, 25 Oct 2026 14:48:22 GMT
+date: Sun, 25 Oct 2026 15:50:13 GMT
 server: uvicorn
-content-length: 40
+content-length: 95
 content-type: application/json
 
-{"id": 4, "title": "Buy milk", "done": false}
+{"id":"usr_supabase_mock_12345","email":"test@example.com","created_at":"2026-10-25T21:00:00Z"}
 ```
 
-### Validation Error (`POST /tasks`)
+### 2. User Log In (`POST /auth/login`)
 ```http
-HTTP/1.1 400 Bad Request
-date: Sun, 25 Oct 2026 14:48:35 GMT
+HTTP/1.1 200 OK
+date: Sun, 25 Oct 2026 15:50:13 GMT
 server: uvicorn
-content-length: 46
+content-length: 274
 content-type: application/json
 
-{"error": "Invalid request body or parameters"}
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refresh_token": "mock_refresh_token_abcdef12345",
+  "token_type": "bearer"
+}
 ```
 
-### Delete Task (`DELETE /tasks/4`)
+### 3. Accessing Protected Route with Valid Bearer Token (`GET /protected/profile`)
 ```http
-HTTP/1.1 204 No Content
-date: Sun, 25 Oct 2026 14:48:47 GMT
+HTTP/1.1 200 OK
+date: Sun, 25 Oct 2026 15:53:14 GMT
 server: uvicorn
+content-length: 95
+content-type: application/json
+
+{"id":"usr_supabase_mock_12345","email":"test@example.com","created_at":"2026-10-25T21:00:00Z"}
+```
+
+### 4. Forged / Tampered Token Rejection
+```http
+HTTP/1.1 401 Unauthorized
+date: Sun, 25 Oct 2026 15:53:14 GMT
+server: uvicorn
+content-length: 36
+content-type: application/json
+
+{"error":"Invalid or expired token"}
+```
+
+### 5. Missing Token Rejection
+```http
+HTTP/1.1 401 Unauthorized
+date: Sun, 25 Oct 2026 15:54:44 GMT
+server: uvicorn
+content-length: 33
+content-type: application/json
+
+{"error":"Access token required"}
 ```
 
 ---
 
-## 🛡️ Architecture & Security
+## 📸 Swagger UI with Bearer Authentication
 
-1. **Zero Secret Leaks:** All database credentials are read from `.env`. The real `.env` is ignored by Git, while `.env.example` is committed as a reference.
-2. **SQL Injection Defense:** All queries strictly use `%s` parameterized placeholders via `psycopg`.
-3. **Data Persistence:** The `taskdata` volume mounts directly to `/var/lib/postgresql/data`. Running `docker compose down` and `docker compose up` preserves all rows.
+Interactive documentation configured with FastAPI's `HTTPBearer` security scheme. Clicking **Authorize** allows pasting an access token to test all locked routes directly from the browser:
 
+![Swagger UI Bearer Auth](swagger_auth.png)
