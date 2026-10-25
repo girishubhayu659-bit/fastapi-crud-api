@@ -136,32 +136,3 @@ server: uvicorn
 2. **SQL Injection Defense:** All queries strictly use `%s` parameterized placeholders via `psycopg`.
 3. **Data Persistence:** The `taskdata` volume mounts directly to `/var/lib/postgresql/data`. Running `docker compose down` and `docker compose up` preserves all rows.
 
----
-
-## 🤖 Stage 6 — AI vs Me (The AI Rematch)
-
-To evaluate containerization and infrastructure design, an AI assistant was asked to containerize the FastAPI CRUD stack with PostgreSQL and Docker Compose. The generated implementation was quarantined and compared.
-
-### 1. The Prompt Used
-```text
-"Containerize our existing FastAPI CRUD task API onto PostgreSQL using Docker and Docker Compose.
-Requirements:
-- Database: official postgres:15-alpine image with POSTGRES_PASSWORD and POSTGRES_DB set.
-- Volume: named volume taskdata for persistent storage.
-- App: Dockerfile for the FastAPI service with requirements.txt.
-- Networking: api service communicates with db service over docker compose network using DATABASE_URL.
-- Driver: use psycopg in Python. Parameterized queries (%s) only.
-- Endpoints: GET /tasks, GET /tasks/{id}, POST /tasks, PUT /tasks/{id}, DELETE /tasks/{id} with identical response contracts.
-- Single command: docker compose up boots both services."
-```
-
-### 2. What the AI Did Better
-- The AI configured `restart: unless-stopped` on both services, ensuring automatic recovery if a container crashes.
-
-### 3. What the AI Got Wrong / Silently Ignored
-1. **Localhost Network Pitfall:** The AI initially set `DATABASE_URL` inside the `api` container to point to `localhost:5432` instead of the compose service name `db:5432`. Inside Docker, `localhost` resolves to the container itself, resulting in connection refused errors.
-2. **Missing Startup Retry:** The AI assumed PostgreSQL starts instantly. In real Docker Compose boots, Postgres takes 2–4 seconds to accept socket connections, causing the API to crash without a connection retry loop.
-3. **Hardcoded Secrets:** The AI hardcoded `POSTGRES_PASSWORD=dev` inside the Python code rather than sourcing from `.env`.
-
-### 4. The Rematch
-- The prompt was amended to enforce `db:5432` service resolution, startup retry backoff, and strict `os.getenv("DATABASE_URL")` retrieval. The regenerated configuration launched cleanly on the first try.
