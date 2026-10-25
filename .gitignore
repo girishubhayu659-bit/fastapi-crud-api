@@ -8,3 +8,4 @@ venv/
 *.pdf
 *.db
 tasks.db
+.env
