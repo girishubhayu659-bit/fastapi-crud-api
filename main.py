@@ -129,10 +129,29 @@ def read_health():
 def get_tasks():
     conn = get_db_connection()
     with conn.cursor() as cursor:
-        cursor.execute("SELECT id, title, done FROM tasks ORDER BY id ASC;")
+        cursor.execute("SELECT * FROM tasks ORDER BY id ASC;")
         rows = cursor.fetchall()
     conn.close()
     return [{"id": row["id"], "title": row["title"], "done": bool(row["done"])} for row in rows]
+
+
+@app.get(
+    "/tasks/{id}",
+    summary="Get a single task",
+    description="Fetches a specific task from PostgreSQL by ID. Returns 404 if not found.",
+)
+def get_task(id: int):
+    conn = get_db_connection()
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT * FROM tasks WHERE id = %s;", (id,))
+        row = cursor.fetchone()
+    conn.close()
+    if row is None:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": "Task not found"},
+        )
+    return {"id": row["id"], "title": row["title"], "done": bool(row["done"])}
 
 
 if __name__ == "__main__":
