@@ -4,6 +4,7 @@ Pipeline: fetch -> extract -> normalize -> validate -> store -> report
 """
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -77,7 +78,7 @@ def fetch_page_with_retry(url: str, cache_filename: str) -> tuple[Optional[str],
                 cache_path.write_text(html, encoding="utf-8")
                 return html, False, len(response.content), None
 
-            # Do NOT retry 404 or 403
+            # Polite rule: Do NOT retry 404 or 403
             if status in (403, 404):
                 return None, False, 0, f"HTTP {status} (Not retried per politeness rules)"
 
@@ -249,9 +250,36 @@ def normalize_and_validate(raw_record: dict) -> tuple[Optional[dict], Optional[d
         }
         return None, error_info
 
+def export_csv(records: list[dict], csv_path: Path):
+    """
+    Export validated records to CSV with flattened fields.
+    """
+    if not records:
+        return
+    fieldnames = [
+        "title",
+        "product_url",
+        "price_text",
+        "price_gbp",
+        "availability_text",
+        "rating_text",
+        "description",
+        "source_page",
+        "fetched_at"
+    ]
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for rec in records:
+            row = dict(rec)
+            # Flatten None/null to empty string for clean CSV representation
+            if row.get("description") is None:
+                row["description"] = ""
+            writer.writerow(row)
+
 def run_scraper(inject_fake_url: bool = False) -> dict:
     """
-    Run the full scraping pipeline and generate run report.
+    Run the full scraping pipeline, save JSON, CSV, errors, and run report.
     """
     start_time_dt = datetime.now(timezone.utc)
     start_time_iso = start_time_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -261,7 +289,6 @@ def run_scraper(inject_fake_url: bool = False) -> dict:
 
     cat_pages, discovered_items, cat_fetches, cat_cache_hits = discover_catalogue_pages(START_URL, MAX_CATALOGUE_PAGES)
 
-    # Optionally inject one broken URL to prove failure survival
     if inject_fake_url:
         print(f"[TEST] Injecting deliberately broken book URL: {FAKE_TEST_URL}")
         discovered_items.append({
@@ -304,13 +331,16 @@ def run_scraper(inject_fake_url: bool = False) -> dict:
     books_path = OUTPUT_DIR / "books.json"
     books_path.write_text(json.dumps(final_records, indent=2, ensure_ascii=False), encoding="utf-8")
 
+    # Write output/books.csv (Stretch goal)
+    csv_path = OUTPUT_DIR / "books.csv"
+    export_csv(final_records, csv_path)
+
     # Write output/errors.json
     errors_path = OUTPUT_DIR / "errors.json"
     errors_path.write_text(json.dumps(error_records, indent=2, ensure_ascii=False), encoding="utf-8")
 
     duration = round(time.time() - t0, 3)
 
-    # Construct run report
     report = {
         "start_time": start_time_iso,
         "duration_seconds": duration,
@@ -331,9 +361,7 @@ def main():
     parser.add_argument("--test-failure", action="store_true", help="Inject one fake broken URL to test failure survival")
     args = parser.parse_args()
 
-    print("Stage 5: Survive failures, report the run")
     report = run_scraper(inject_fake_url=args.test_failure)
-
     print("\n--- RUN REPORT ---")
     print(json.dumps(report, indent=2))
 

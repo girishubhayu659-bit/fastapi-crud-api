@@ -1,4 +1,4 @@
-# FlyRank Backend Track — Progressive API Stack
+# FlyRank Backend Track — Progressive API & Data Stack
 
 > ### 📌 Project Milestones & Branches
 > This repository documents the progressive evolution of our backend system across all internship weeks. Each milestone is preserved in its own branch with its dedicated code, configuration, and documentation:
@@ -6,147 +6,168 @@
 > * 🚀 **Assignment 1:** [**Week 2 — In-Memory CRUD API**](https://github.com/girishubhayu659-bit/fastapi-crud-api/tree/w2-build-your-first-crud-api)
 > * 🗄️ **Assignment 2:** [**Week 3 — SQLite Database Persistence**](https://github.com/girishubhayu659-bit/fastapi-crud-api/tree/w3-connecting-crud-to-database)
 > * 🐳 **Assignment 3:** [**Week 3 — Containerized PostgreSQL Stack**](https://github.com/girishubhayu659-bit/fastapi-crud-api/tree/w3-containerize-your-stack)
-> * 🔒 **Assignment 4 (Current):** [**Week 4 — Supabase Auth & JWT Protection**](https://github.com/girishubhayu659-bit/fastapi-crud-api/tree/w4-auth-login-and-protect)
+> * 🔐 **Assignment 4:** [**Week 4 — Supabase Auth & JWT Protection**](https://github.com/girishubhayu659-bit/fastapi-crud-api/tree/w4-auth-login-and-protect)
+> * 🕷️ **Assignment 5 (Current):** [**Week 5 — The Polite Scraper**](https://github.com/girishubhayu659-bit/fastapi-crud-api/tree/w5-the-polite-scraper)
 
 ---
 
-# Auth · Login & Protect API (Supabase Auth & JWT Protection)
+# The Polite Scraper (FlyRank Internship · Week 5 · Assignment A9)
 
-A production-grade, secure RESTful API built with **Python 3.11/3.13**, **FastAPI**, and **Supabase Auth** as the trusted Identity Provider.
-
-This service implements standard modern authentication: users sign up, log in, receive cryptographically signed JSON Web Tokens (JWTs), and access protected routes using HTTP Bearer authorization headers verified by a reusable FastAPI dependency guard.
+A polite, resilient web scraping pipeline located in the [`scraper/`](./scraper) directory that traverses the first 3 catalogue pages of Books to Scrape, discovers and visits all 60 book detail pages, turns messy HTML into clean, schema-validated JSON and CSV records, survives broken pages without crashing, and ends every run with an honest audit run report.
 
 ---
 
-## 🔒 Security Architecture (The Trust Triangle)
+## 1. Target Classification
 
-1. **Identity Provider (Supabase Auth):** User credentials and password hashes are never stored on this API server. Supabase securely manages accounts and signs tokens.
-2. **Stateless JWT Verification:** Protected routes inspect the `Authorization: Bearer <token>` header, verifying token signatures and expiration via Supabase without storing sessions in server memory.
-3. **Environment Security:** API keys and project URLs live strictly in `.env` (which is git-ignored). A template `.env.example` is provided for configuration.
+- **Target Site:** Books to Scrape (`https://books.toscrape.com/`)
+- **Purpose / Why:** Books to Scrape is an open web scraping sandbox created specifically for beginners and developers to practise scraping without violating production websites' terms of service. As explicitly stated on [toscrape.com](https://toscrape.com):
+  > *"A fictional bookstore that desperately wants to be scraped. It's a safe place for beginners learning web scraping and for developers validating their scraping technologies as well."*
+- **Scope / How Much:** Exactly the first 3 catalogue pages, discovering and visiting 60 unique book detail pages.
+- **Data Collected:**
+  - `title` (string): Full book title from product page `<h1>`.
+  - `product_url` (canonical absolute URL string): Unique identifier for deduplication.
+  - `price_text` (raw string): Raw price string including currency symbol (e.g. `"£51.77"`).
+  - `price_gbp` (numeric float): Clean numeric price normalized for sorting/filtering (e.g. `51.77`).
+  - `availability_text` (raw string): Stock availability text (e.g. `"In stock (22 available)"`).
+  - `rating_text` (string): Textual star rating (e.g. `"Three"`).
+  - `description` (string or null): Book description paragraph, or `null` if omitted.
+  - `source_page` (canonical URL string): Catalogue page from which the book link was discovered.
+  - `fetched_at` (ISO 8601 UTC timestamp): Timestamp showing exactly when the record was retrieved (provenance).
+- **Why Appropriate Here:** Scraping this site is appropriate because it is a designated public sandbox specifically built for scraping practice; no private, copyrighted, or sensitive user data exists, and the workload is strictly limited to 63 total requests paced politely with rate limiting and local disk caching.
+- **Robots.txt Check:**
+  - URL checked: `https://books.toscrape.com/robots.txt`
+  - Result: Returned HTTP status `404 Not Found` (`no robots file found`).
+  - Interpretation: A missing `robots.txt` is not an automatic permission to scrape, but Books to Scrape's stated sandbox charter explicitly invites practice scraping.
+
+> **Ethics Commitment:**
+> "I will not reuse this code on another site without checking its rules and terms first."
 
 ---
 
-## 🚀 Quickstart (One Documented Command)
+## 2. Lane & Installation
 
-### 1. Prerequisites
-- Python 3.10+ installed
+- **Lane:** Python 3.10+
+- **HTTP Client:** `requests`
+- **HTML Parser:** `beautifulsoup4`
+- **Schema Validator:** `pydantic` (v2)
+- **Test Framework:** `pytest`
 
-### 2. Configure Environment Variables
-Copy the template configuration file:
+### Quick Install
 
 ```bash
-cp .env.example .env
-```
-*(On Windows PowerShell: `Copy-Item .env.example .env`)*
-
-Fill in your Supabase credentials in `.env`:
-```text
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your-anon-key-here
-PORT=8000
-```
-
-### 3. Install Dependencies
-```bash
+cd scraper
 pip install -r requirements.txt
 ```
 
-### 4. Start the Server
-Run the single command:
+---
+
+## 3. One Copy-Pasteable Run Command
 
 ```bash
-python main.py
+# Run the pipeline
+python scraper/src/main.py
 ```
+*(Or `cd scraper && python src/main.py`)*
 
-*(Alternatively, via Uvicorn: `uvicorn main:app --reload --port 8000`)*
+### Additional Commands
 
-The server will boot on `http://localhost:8000`.
+```bash
+# Stage 5 Checkpoint: Prove failure survival by injecting a deliberately broken book URL
+python scraper/src/main.py --test-failure
+
+# Run parser & validation test suite
+pytest scraper/tests/ -v
+```
 
 ---
 
-## 📖 API Reference Table
+## 4. Record Schema (Pydantic)
 
-Interactive Swagger UI documentation with Bearer Auth padlock is live at:  
-👉 **[http://localhost:8000/docs](http://localhost:8000/docs)**
+Every record is validated against the following Pydantic schema before it is written to `output/books.json`. Records failing validation are redirected to `output/errors.json`:
 
-| Method | Endpoint | Description | Auth Required? | Success Status | Error Statuses |
-| :--- | :--- | :--- | :---: | :--- | :--- |
-| `POST` | `/auth/signup` | Registers new user account via Supabase | **None** | `201 Created` | `400 Bad Request` |
-| `POST` | `/auth/login` | Authenticates user & returns JWT access token | **None** | `200 OK` | `400 Bad Request`, `401 Unauthorized` |
-| `POST` | `/auth/logout` | Terminates user session | **`Bearer <token>`** | `204 No Content`| `401 Unauthorized` |
-| `GET` | `/public/info` | Public open data for unauthenticated visitors | **None** | `200 OK` | — |
-| `GET` | `/protected/profile`| Returns authenticated user's profile metadata | **`Bearer <token>`** | `200 OK` | `401 Unauthorized` |
-| `GET` | `/protected/dashboard`| Secondary protected route demonstrating middleware reuse | **`Bearer <token>`** | `200 OK` | `401 Unauthorized` |
+```python
+class BookRecord(BaseModel):
+    title: str = Field(..., min_length=1, description="Book title")
+    product_url: str = Field(..., description="Canonical absolute product URL starting with https://")
+    price_text: str = Field(..., min_length=1, description="Raw price string including currency")
+    price_gbp: float = Field(..., ge=0.0, description="Clean numeric price in GBP")
+    availability_text: str = Field(..., min_length=1, description="Raw stock availability string")
+    rating_text: str = Field(..., min_length=1, description="Star rating string")
+    description: Optional[str] = Field(None, description="Book description text or null")
+    source_page: str = Field(..., description="Provenance catalogue page URL starting with https://")
+    fetched_at: str = Field(..., description="Provenance ISO 8601 UTC timestamp")
+```
 
 ---
 
-## 🔍 Sample `curl -i` Output
+## 5. Politeness Rules
 
-Real terminal interaction showing authentication and protected gate behavior:
+1. **Honest User-Agent:** Every request sends `FlyRankInternship-A9/1.0 (+https://github.com/girishubhayu659-bit/fastapi-crud-api)` so site maintainers can identify the crawler and contact the repository owner.
+2. **Polite Delay:** Enforces a minimum `500 ms` delay (`time.sleep(0.5)`) between real network requests to avoid server hammering. Cached requests require 0 ms delay.
+3. **Strict Timeouts:** Every network request has a `10.0 s` timeout so hanging requests terminate gracefully.
+4. **Local Disk Cache:** HTML files are cached in `cache/` (`catalogue-page-*.html`, `book-*.html`). Subsequent development runs read directly from cache without hitting the remote server.
+5. **Surviving Failures & Retry Rules:** Single retry with delay for transient network issues and `5xx` server errors. Never retries `404` (Not Found) or `403` (Forbidden).
 
-### 1. User Sign Up (`POST /auth/signup`)
-```http
-HTTP/1.1 201 Created
-date: Sun, 25 Oct 2026 15:50:13 GMT
-server: uvicorn
-content-length: 95
-content-type: application/json
+---
 
-{"id":"usr_supabase_mock_12345","email":"test@example.com","created_at":"2026-10-25T21:00:00Z"}
-```
+## 6. Honest Limitation
 
-### 2. User Log In (`POST /auth/login`)
-```http
-HTTP/1.1 200 OK
-date: Sun, 25 Oct 2026 15:50:13 GMT
-server: uvicorn
-content-length: 274
-content-type: application/json
+This scraper is specialized for server-rendered HTML pages where all content is sent in the initial HTTP response. It does not execute JavaScript; modern Single Page Applications (SPAs) that load content client-side via JavaScript after initial pageload (such as `quotes.toscrape.com/js`) cannot be scraped with this pipeline without either reverse-engineering the underlying JSON API or using a headless browser engine like Playwright.
 
+---
+
+## 7. Why No Browser Was Needed
+
+This assignment needed no browser: the data is already in the HTML the server sends, so a browser would only add cost. Using a headless browser (such as Chromium via Playwright or Puppeteer) would consume 10x-20x more memory and CPU cycles while introducing heavy binary dependencies with no data extraction benefit.
+
+---
+
+## 8. Real Run Report Proof
+
+Below is the genuine `scraper/output/run-report.json` generated from running the pipeline against Books to Scrape:
+
+```json
 {
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refresh_token": "mock_refresh_token_abcdef12345",
-  "token_type": "bearer"
+  "start_time": "2026-11-01T11:37:33Z",
+  "duration_seconds": 0.704,
+  "pages_fetched": 0,
+  "cache_hits": 63,
+  "valid_records": 60,
+  "invalid_records": 0,
+  "failed_pages": 0
 }
 ```
 
-### 3. Accessing Protected Route with Valid Bearer Token (`GET /protected/profile`)
-```http
-HTTP/1.1 200 OK
-date: Sun, 25 Oct 2026 15:53:14 GMT
-server: uvicorn
-content-length: 95
-content-type: application/json
+When tested with `--test-failure` (deliberately broken URL injected), the pipeline gracefully logs and skips the failure, finishing cleanly:
 
-{"id":"usr_supabase_mock_12345","email":"test@example.com","created_at":"2026-10-25T21:00:00Z"}
-```
-
-### 4. Forged / Tampered Token Rejection
-```http
-HTTP/1.1 401 Unauthorized
-date: Sun, 25 Oct 2026 15:53:14 GMT
-server: uvicorn
-content-length: 36
-content-type: application/json
-
-{"error":"Invalid or expired token"}
-```
-
-### 5. Missing Token Rejection
-```http
-HTTP/1.1 401 Unauthorized
-date: Sun, 25 Oct 2026 15:54:44 GMT
-server: uvicorn
-content-length: 33
-content-type: application/json
-
-{"error":"Access token required"}
+```json
+{
+  "start_time": "2026-11-01T11:36:00Z",
+  "duration_seconds": 2.531,
+  "pages_fetched": 1,
+  "cache_hits": 63,
+  "valid_records": 60,
+  "invalid_records": 0,
+  "failed_pages": 1
+}
 ```
 
 ---
 
-## 📸 Swagger UI with Bearer Authentication
+## 9. Ethics Note
 
-Interactive documentation configured with FastAPI's `HTTPBearer` security scheme. Clicking **Authorize** allows pasting an access token to test all locked routes directly from the browser:
+- **Prioritize Official APIs:** Always check for and use an official, documented API when one exists. Web scraping is a fallback when no structured API is available.
+- **Respect Access Controls:** Never bypass logins, CAPTCHAs, paywalls, or rate-limit blocks. If a server responds with HTTP 403 or 429, respect the refusal.
+- **Collect Only What You Need:** Target only the specific fields and pages relevant to the task. Never crawl or store unbounded data indiscriminately.
 
-![Swagger UI Bearer Auth](swagger_auth.png)
+---
+
+## 10. Extras & Stretch Deliverables
+
+1. **CSV Export:** The pipeline exports `scraper/output/books.csv` in addition to `books.json`, flattening optional null descriptions to clean empty strings.
+2. **Parser Unit Tests:** A comprehensive 5-test suite in `scraper/tests/test_scraper.py` verifying:
+   - Price normalization (`£51.77` -> `51.77`)
+   - Relative to absolute URL resolution (`urljoin`)
+   - Missing description fixture handling (`None` / `null`)
+   - Duplicate URL deduplication (canonical URL identity)
+   - Malformed fixture schema rejection (redirected to errors)
