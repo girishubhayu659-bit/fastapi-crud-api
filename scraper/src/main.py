@@ -3,11 +3,14 @@ The Polite Scraper - FlyRank Internship Week 5 (Assignment A9)
 Pipeline: fetch -> extract -> normalize -> validate -> store -> report
 """
 
+import json
 import os
+import re
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
@@ -52,24 +55,32 @@ def fetch_page(url: str, cache_filename: str) -> tuple[str, bool, int]:
     byte_size = len(response.content)
     return html, False, byte_size
 
-def discover_catalogue_pages(start_url: str, max_pages: int = 3) -> tuple[int, list[tuple[str, str]], list[str]]:
+def get_book_slug(product_url: str) -> str:
+    """Generate safe cache filename slug from product url."""
+    parts = product_url.rstrip("/").split("/")
+    # e.g., https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html -> a-light-in-the-attic_1000
+    if parts[-1].endswith(".html"):
+        slug = parts[-2]
+    else:
+        slug = parts[-1]
+    # sanitize
+    return re.sub(r"[^a-zA-Z0-9_\-]", "_", slug)
+
+def discover_catalogue_pages(start_url: str, max_pages: int = 3) -> tuple[int, list[dict]]:
     """
     Traverse catalogue pages following the 'next' link up to max_pages.
-    Returns: (catalogue_page_count, discovered_book_items, unique_book_urls)
+    Returns: (catalogue_page_count, list_of_discovered_items)
+    where item is {"product_url": ..., "source_page": ...}
     """
     current_url = start_url
     pages_processed = 0
-    all_discovered_links: list[tuple[str, str]] = [] # (book_url, source_page)
+    discovered_items: list[dict] = []
+    seen_urls = set()
 
     while current_url and pages_processed < max_pages:
         pages_processed += 1
         cache_filename = f"catalogue-page-{pages_processed}.html"
         html, was_cached, size = fetch_page(current_url, cache_filename)
-
-        if was_cached:
-            print(f"CACHE HIT: {cache_filename} ({size} bytes)")
-        else:
-            print(f"FETCH: {current_url} -> {cache_filename} ({size} bytes)")
 
         soup = BeautifulSoup(html, "html.parser")
 
@@ -79,9 +90,14 @@ def discover_catalogue_pages(start_url: str, max_pages: int = 3) -> tuple[int, l
             href = pod.get("href")
             if href:
                 absolute_url = urljoin(current_url, href)
-                all_discovered_links.append((absolute_url, current_url))
+                if absolute_url not in seen_urls:
+                    seen_urls.add(absolute_url)
+                    discovered_items.append({
+                        "product_url": absolute_url,
+                        "source_page": current_url
+                    })
 
-        # Check for next page link
+        # Follow next link
         next_li = soup.select_one("li.next a")
         if next_li and pages_processed < max_pages:
             next_href = next_li.get("href")
@@ -89,14 +105,86 @@ def discover_catalogue_pages(start_url: str, max_pages: int = 3) -> tuple[int, l
         else:
             current_url = None
 
-    # Deduplicate preserving order
-    unique_urls = list(dict.fromkeys(url for url, _ in all_discovered_links))
-    return pages_processed, all_discovered_links, unique_urls
+    return pages_processed, discovered_items
+
+def extract_raw_book_record(product_url: str, source_page: str) -> dict:
+    """
+    Fetch detail page politely, cache it, and extract raw record with 8 required fields.
+    """
+    slug = get_book_slug(product_url)
+    cache_filename = f"book-{slug}.html"
+
+    # Capture timestamp before/during fetch
+    fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    html, was_cached, _ = fetch_page(product_url, cache_filename)
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Aim selectors at product area: article.product_page
+    product_main = soup.select_one("article.product_page .product_main")
+    if not product_main:
+        product_main = soup.select_one(".product_main")
+
+    title = None
+    price_text = None
+    availability_text = None
+    rating_text = None
+
+    if product_main:
+        h1 = product_main.select_one("h1")
+        if h1:
+            title = h1.get_text(strip=True)
+
+        price_tag = product_main.select_one("p.price_color")
+        if price_tag:
+            price_text = price_tag.get_text(strip=True)
+
+        avail_tag = product_main.select_one("p.instock.availability")
+        if avail_tag:
+            # Normalize internal whitespace while keeping text intact
+            availability_text = " ".join(avail_tag.get_text().split())
+
+        star_tag = product_main.select_one("p.star-rating")
+        if star_tag:
+            classes = star_tag.get("class", [])
+            rating_classes = [c for c in classes if c != "star-rating"]
+            if rating_classes:
+                rating_text = rating_classes[0]
+
+    # Description from #product_description + p
+    description = None
+    desc_header = soup.select_one("#product_description")
+    if desc_header:
+        desc_sibling = desc_header.find_next_sibling("p")
+        if desc_sibling:
+            desc_text = desc_sibling.get_text(strip=True)
+            description = desc_text if desc_text else None
+
+    return {
+        "title": title,
+        "product_url": product_url,
+        "price_text": price_text,
+        "availability_text": availability_text,
+        "rating_text": rating_text,
+        "description": description,
+        "source_page": source_page,
+        "fetched_at": fetched_at
+    }
 
 def main():
-    print("Stage 2: Discover three catalogue pages")
-    cat_pages, discovered_items, unique_urls = discover_catalogue_pages(START_URL, MAX_CATALOGUE_PAGES)
-    print(f"catalogue_pages={cat_pages} , discovered={len(discovered_items)} , unique_urls={len(unique_urls)}")
+    print("Stage 3: Extract book details")
+    cat_pages, discovered_items = discover_catalogue_pages(START_URL, MAX_CATALOGUE_PAGES)
+    print(f"catalogue_pages={cat_pages} , discovered={len(discovered_items)}")
+
+    raw_records = []
+    for item in discovered_items:
+        record = extract_raw_book_record(item["product_url"], item["source_page"])
+        raw_records.append(record)
+
+    # CHECKPOINT: print one complete raw record and summary detail_pages=60
+    print("\n--- SAMPLE RAW RECORD ---")
+    print(json.dumps(raw_records[0], indent=2))
+    print(f"\ndetail_pages={len(raw_records)}")
 
 if __name__ == "__main__":
     main()
