@@ -3,6 +3,7 @@ The Polite Scraper - FlyRank Internship Week 5 (Assignment A9)
 Pipeline: fetch -> extract -> normalize -> validate -> store -> report
 """
 
+import argparse
 import json
 import os
 import re
@@ -11,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -27,6 +28,7 @@ REQUEST_TIMEOUT = 10.0
 START_URL = "https://books.toscrape.com/catalogue/page-1.html"
 MAX_CATALOGUE_PAGES = 3
 POLITE_DELAY_SECONDS = 0.5
+FAKE_TEST_URL = "https://books.toscrape.com/catalogue/fake-broken-book-9999/index.html"
 
 class BookRecord(BaseModel):
     """Pydantic schema for validated, normalized book records."""
@@ -47,12 +49,11 @@ class BookRecord(BaseModel):
             raise ValueError(f"URL must start with https://, got: {v}")
         return v
 
-def fetch_page(url: str, cache_filename: str) -> tuple[str, bool, int]:
+def fetch_page_with_retry(url: str, cache_filename: str) -> tuple[Optional[str], bool, int, Optional[str]]:
     """
-    Fetch a page politely with timeout and user-agent.
-    Saves HTML to cache/ if not already cached.
-    Cached pages need no delay. Real requests wait at least 0.5s.
-    Returns: (html_content, was_cached, byte_size)
+    Fetch a page politely with cache support and retry on 5xx/timeout.
+    Does NOT retry 404 (not found) or 403 (forbidden).
+    Returns: (html_content, was_cached, byte_size, error_message)
     """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache_path = CACHE_DIR / cache_filename
@@ -60,21 +61,44 @@ def fetch_page(url: str, cache_filename: str) -> tuple[str, bool, int]:
     if cache_path.exists():
         html = cache_path.read_text(encoding="utf-8")
         byte_size = cache_path.stat().st_size
-        return html, True, byte_size
-
-    # Polite delay for real network request
-    time.sleep(POLITE_DELAY_SECONDS)
+        return html, True, byte_size, None
 
     headers = {"User-Agent": USER_AGENT}
-    response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+    max_attempts = 2  # 1 initial try + 1 retry for transient 5xx/timeouts
 
-    if response.status_code != 200:
-        raise RuntimeError(f"Fetch failed for {url} with status code {response.status_code}")
+    for attempt in range(1, max_attempts + 1):
+        try:
+            time.sleep(POLITE_DELAY_SECONDS)
+            response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+            status = response.status_code
 
-    html = response.text
-    cache_path.write_text(html, encoding="utf-8")
-    byte_size = len(response.content)
-    return html, False, byte_size
+            if status == 200:
+                html = response.text
+                cache_path.write_text(html, encoding="utf-8")
+                return html, False, len(response.content), None
+
+            # Do NOT retry 404 or 403
+            if status in (403, 404):
+                return None, False, 0, f"HTTP {status} (Not retried per politeness rules)"
+
+            # Retry transient 5xx server errors once
+            if status >= 500:
+                if attempt < max_attempts:
+                    time.sleep(1.0)
+                    continue
+                return None, False, 0, f"HTTP {status} Server Error"
+
+            return None, False, 0, f"HTTP {status} Unexpected response"
+
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            if attempt < max_attempts:
+                time.sleep(1.0)
+                continue
+            return None, False, 0, f"Network error: {exc}"
+        except Exception as exc:
+            return None, False, 0, f"Unexpected error: {exc}"
+
+    return None, False, 0, "Max attempts reached"
 
 def get_book_slug(product_url: str) -> str:
     """Generate safe cache filename slug from product url."""
@@ -92,23 +116,32 @@ def normalize_price(price_text: str) -> float:
         raise ValueError(f"Could not extract numeric price from: {price_text}")
     return float(match.group(1))
 
-def discover_catalogue_pages(start_url: str, max_pages: int = 3) -> tuple[int, list[dict]]:
+def discover_catalogue_pages(start_url: str, max_pages: int = 3) -> tuple[int, list[dict], int, int]:
     """
     Traverse catalogue pages following the 'next' link up to max_pages.
-    Returns: (catalogue_page_count, list_of_discovered_items)
+    Returns: (catalogue_page_count, discovered_items, network_fetches, cache_hits)
     """
     current_url = start_url
     pages_processed = 0
     discovered_items: list[dict] = []
     seen_urls = set()
+    cat_fetches = 0
+    cat_cache_hits = 0
 
     while current_url and pages_processed < max_pages:
         pages_processed += 1
         cache_filename = f"catalogue-page-{pages_processed}.html"
-        html, was_cached, size = fetch_page(current_url, cache_filename)
+        html, was_cached, _, err = fetch_page_with_retry(current_url, cache_filename)
+
+        if was_cached:
+            cat_cache_hits += 1
+        else:
+            cat_fetches += 1
+
+        if not html:
+            break
 
         soup = BeautifulSoup(html, "html.parser")
-
         pods = soup.select("article.product_pod h3 a")
         for pod in pods:
             href = pod.get("href")
@@ -128,17 +161,21 @@ def discover_catalogue_pages(start_url: str, max_pages: int = 3) -> tuple[int, l
         else:
             current_url = None
 
-    return pages_processed, discovered_items
+    return pages_processed, discovered_items, cat_fetches, cat_cache_hits
 
-def extract_raw_book_record(product_url: str, source_page: str) -> dict:
+def extract_raw_book_record(product_url: str, source_page: str) -> tuple[Optional[dict], bool, Optional[str]]:
     """
     Fetch detail page politely, cache it, and extract raw record with 8 required fields.
+    Returns: (raw_dict_or_None, was_cached, error_or_None)
     """
     slug = get_book_slug(product_url)
     cache_filename = f"book-{slug}.html"
 
     fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    html, was_cached, _ = fetch_page(product_url, cache_filename)
+    html, was_cached, _, err = fetch_page_with_retry(product_url, cache_filename)
+
+    if not html:
+        return None, was_cached, err
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -159,7 +196,6 @@ def extract_raw_book_record(product_url: str, source_page: str) -> dict:
         price_tag = product_main.select_one("p.price_color")
         if price_tag:
             raw_p = price_tag.get_text(strip=True)
-            # Remove mojibake UTF-8 artifact Â if present
             price_text = raw_p.replace("\u00c2", "").replace("Â", "")
 
         avail_tag = product_main.select_one("p.instock.availability")
@@ -181,7 +217,7 @@ def extract_raw_book_record(product_url: str, source_page: str) -> dict:
             desc_text = desc_sibling.get_text(strip=True)
             description = desc_text if desc_text else None
 
-    return {
+    raw_record = {
         "title": title,
         "product_url": product_url,
         "price_text": price_text,
@@ -191,6 +227,7 @@ def extract_raw_book_record(product_url: str, source_page: str) -> dict:
         "source_page": source_page,
         "fetched_at": fetched_at
     }
+    return raw_record, was_cached, None
 
 def normalize_and_validate(raw_record: dict) -> tuple[Optional[dict], Optional[dict]]:
     """
@@ -198,12 +235,10 @@ def normalize_and_validate(raw_record: dict) -> tuple[Optional[dict], Optional[d
     Returns: (valid_dict, None) or (None, error_dict)
     """
     try:
-        # Normalize price_text -> price_gbp
         price_gbp = normalize_price(raw_record.get("price_text", ""))
         normalized = dict(raw_record)
         normalized["price_gbp"] = price_gbp
 
-        # Validate with Pydantic
         record = BookRecord(**normalized)
         return record.model_dump(), None
     except Exception as exc:
@@ -214,51 +249,93 @@ def normalize_and_validate(raw_record: dict) -> tuple[Optional[dict], Optional[d
         }
         return None, error_info
 
-def save_records(records: list[dict], errors: list[dict]):
+def run_scraper(inject_fake_url: bool = False) -> dict:
     """
-    Save validated records to output/books.json and errors to output/errors.json idempotently.
-    Deduplicates by canonical product_url.
+    Run the full scraping pipeline and generate run report.
     """
+    start_time_dt = datetime.now(timezone.utc)
+    start_time_iso = start_time_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    t0 = time.time()
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Deduplicate by canonical product_url
-    deduped_records = {}
-    for r in records:
-        deduped_records[r["product_url"]] = r
-    final_records = list(deduped_records.values())
+    cat_pages, discovered_items, cat_fetches, cat_cache_hits = discover_catalogue_pages(START_URL, MAX_CATALOGUE_PAGES)
 
-    books_path = OUTPUT_DIR / "books.json"
-    books_path.write_text(json.dumps(final_records, indent=2, ensure_ascii=False), encoding="utf-8")
-
-    errors_path = OUTPUT_DIR / "errors.json"
-    errors_path.write_text(json.dumps(errors, indent=2, ensure_ascii=False), encoding="utf-8")
-
-def main():
-    print("Stage 4: Clean it, check it, store it")
-    cat_pages, discovered_items = discover_catalogue_pages(START_URL, MAX_CATALOGUE_PAGES)
+    # Optionally inject one broken URL to prove failure survival
+    if inject_fake_url:
+        print(f"[TEST] Injecting deliberately broken book URL: {FAKE_TEST_URL}")
+        discovered_items.append({
+            "product_url": FAKE_TEST_URL,
+            "source_page": START_URL
+        })
 
     valid_records: list[dict] = []
     error_records: list[dict] = []
+    failed_pages = 0
+    pages_fetched = cat_fetches
+    cache_hits = cat_cache_hits
 
     for item in discovered_items:
-        raw_record = extract_raw_book_record(item["product_url"], item["source_page"])
-        valid_rec, err = normalize_and_validate(raw_record)
+        raw_record, was_cached, fetch_err = extract_raw_book_record(item["product_url"], item["source_page"])
+
+        if was_cached:
+            cache_hits += 1
+        else:
+            pages_fetched += 1
+
+        if fetch_err:
+            print(f"[SKIP] Failed page logged and skipped: {item['product_url']} -> {fetch_err}")
+            failed_pages += 1
+            continue
+
+        valid_rec, val_err = normalize_and_validate(raw_record)
         if valid_rec:
             valid_records.append(valid_rec)
         else:
-            error_records.append(err)
+            error_records.append(val_err)
 
-    save_records(valid_records, error_records)
+    # Deduplicate by canonical product_url
+    deduped_records = {}
+    for r in valid_records:
+        deduped_records[r["product_url"]] = r
+    final_records = list(deduped_records.values())
 
-    # Load stored books.json to verify idempotency and types
-    saved = json.loads((OUTPUT_DIR / "books.json").read_text(encoding="utf-8"))
-    count = len(saved)
-    all_prices_numeric = all(isinstance(r["price_gbp"], (int, float)) for r in saved)
-    all_urls_https = all(r["product_url"].startswith("https://") for r in saved)
+    # Write output/books.json
+    books_path = OUTPUT_DIR / "books.json"
+    books_path.write_text(json.dumps(final_records, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    print(f"records_stored={count}")
-    print(f"all_prices_numeric={all_prices_numeric}")
-    print(f"all_urls_https={all_urls_https}")
+    # Write output/errors.json
+    errors_path = OUTPUT_DIR / "errors.json"
+    errors_path.write_text(json.dumps(error_records, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    duration = round(time.time() - t0, 3)
+
+    # Construct run report
+    report = {
+        "start_time": start_time_iso,
+        "duration_seconds": duration,
+        "pages_fetched": pages_fetched,
+        "cache_hits": cache_hits,
+        "valid_records": len(final_records),
+        "invalid_records": len(error_records),
+        "failed_pages": failed_pages
+    }
+
+    report_path = OUTPUT_DIR / "run-report.json"
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    return report
+
+def main():
+    parser = argparse.ArgumentParser(description="FlyRank Polite Scraper")
+    parser.add_argument("--test-failure", action="store_true", help="Inject one fake broken URL to test failure survival")
+    args = parser.parse_args()
+
+    print("Stage 5: Survive failures, report the run")
+    report = run_scraper(inject_fake_url=args.test_failure)
+
+    print("\n--- RUN REPORT ---")
+    print(json.dumps(report, indent=2))
 
 if __name__ == "__main__":
     main()
