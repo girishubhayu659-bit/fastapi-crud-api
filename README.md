@@ -1,16 +1,3 @@
-# FlyRank Backend Track — Progressive API & Data Stack
-
-> ### 📌 Project Milestones & Branches
-> This repository documents the progressive evolution of our backend system across all internship weeks. Each milestone is preserved in its own branch with its dedicated code, configuration, and documentation:
->
-> * 🚀 **Assignment 1:** [**Week 2 — In-Memory CRUD API**](https://github.com/girishubhayu659-bit/fastapi-crud-api/tree/w2-build-your-first-crud-api)
-> * 🗄️ **Assignment 2:** [**Week 3 — SQLite Database Persistence**](https://github.com/girishubhayu659-bit/fastapi-crud-api/tree/w3-connecting-crud-to-database)
-> * 🐳 **Assignment 3:** [**Week 3 — Containerized PostgreSQL Stack**](https://github.com/girishubhayu659-bit/fastapi-crud-api/tree/w3-containerize-your-stack)
-> * 🔐 **Assignment 4:** [**Week 4 — Supabase Auth & JWT Protection**](https://github.com/girishubhayu659-bit/fastapi-crud-api/tree/w4-auth-login-and-protect)
-> * 🕷️ **Assignment 5 (Current):** [**Week 5 — The Polite Scraper**](https://github.com/girishubhayu659-bit/fastapi-crud-api/tree/w5-the-polite-scraper)
-
----
-
 # The Polite Scraper (FlyRank Internship · Week 5 · Assignment A9)
 
 A polite, resilient web scraping pipeline located in the [`scraper/`](./scraper) directory that traverses the first 3 catalogue pages of Books to Scrape, discovers and visits all 60 book detail pages, turns messy HTML into clean, schema-validated JSON and CSV records, survives broken pages without crashing, and ends every run with an honest audit run report.
